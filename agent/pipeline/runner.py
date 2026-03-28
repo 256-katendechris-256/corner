@@ -6,6 +6,7 @@ from agent.pipeline.state import PipelineState
 from agent.pipeline.nodes import (
     node_collect, node_normalise, node_score, node_synthesise
 )
+import json, os
 
 logging.basicConfig(level="INFO")
 logger = logging.getLogger(__name__)
@@ -27,6 +28,20 @@ def build_pipeline():
 
     return graph.compile()
 
+def save_draft(state: PipelineState) -> None:
+    """Persist the digest draft so the approval API can serve it."""
+    draft_path = "/tmp/digest_draft.json"
+    payload = {
+        "run_id":       state["run_id"],
+        "digest_draft": state["digest_draft"],
+        "item_count":   len(state["scored_items"]),
+        "error_count":  len(state["errors"]),
+        "errors":       state["errors"],
+    }
+    with open(draft_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Draft saved to {draft_path}")
+
 
 def run_pipeline() -> PipelineState:
     pipeline = build_pipeline()
@@ -43,6 +58,7 @@ def run_pipeline() -> PipelineState:
     logger.info(f"Starting pipeline run {initial_state['run_id']}")
     final_state = pipeline.invoke(initial_state)
     logger.info(f"Pipeline complete — errors: {final_state['errors']}")
+    save_draft(final_state)
     return final_state
 
 
