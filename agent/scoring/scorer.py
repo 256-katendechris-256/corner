@@ -120,7 +120,8 @@ from agent.normalisation.normaliser import retrieve_similar
 import logging, uuid, os
 
 logger = logging.getLogger(__name__)
-client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+client = Groq(api_key=settings.groq_api_key)
+#client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
 
 SYSTEM_PROMPT = """
 You are an AI market intelligence analyst for Set Piece, a UK digital agency.

@@ -29,6 +29,7 @@ huggingface_hub==1.8.0
 hyperframe==6.1.0
 idna==3.11
 importlib_metadata==8.7.1
+iniconfig==2.3.0
 Jinja2==3.1.6
 jiter==0.13.0
 joblib==1.5.3
@@ -75,12 +76,14 @@ orjson==3.11.7
 ormsgpack==1.12.2
 p==1.5.0
 packaging==25.0
+pluggy==1.6.0
 protobuf==6.33.6
 psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic-settings==2.13.1
 pydantic_core==2.41.5
 Pygments==2.19.2
+pytest==9.0.2
 python-dotenv==1.2.2
 PyYAML==6.0.3
 regex==2026.2.28
