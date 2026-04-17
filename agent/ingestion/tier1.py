@@ -43,10 +43,21 @@ TIER1_RSS = [
         "rss":  "https://community.openai.com/latest.rss",
     },
     {
-    "name": "Anthropic News",
-    "rss":  "https://www.anthropic.com/rss.xml", 
+        "name": "Anthropic News",
+        "rss":  "https://www.anthropic.com/rss.xml",
     },
-
+    {
+        "name": "Anthropic Engineering",
+        "rss":  "https://www.anthropic.com/engineering/rss.xml",
+    },
+    {
+        "name": "Google DeepMind Blog",
+        "rss":  "https://deepmind.google/blog/rss.xml",
+    },
+    {
+        "name": "Google AI Blog",
+        "rss":  "https://blog.google/technology/ai/rss/",
+    },
 ]
 
 def _parse_date(entry) -> datetime:
@@ -87,15 +98,27 @@ def ingest_tier1() -> list[SourceItem]:
     for source in TIER1_RSS:
         logger.info(f"Parsing RSS: {source['name']}")
         feed = feedparser.parse(source["rss"])
+        if feed.bozo:
+            logger.warning(f"  Feed parse warning: {feed.bozo_exception}")
         count = 0
         for entry in feed.entries[:15]:
             url = entry.get("link", "")
             if not url:
                 continue
-            content = (
-                entry.get("summary", "")
-                or entry.get("content", [{}])[0].get("value", "")
-            )
+
+            # Fetch full article text, fall back to RSS summary
+            content = fetch_page(url)
+            if content is None:
+                content = (
+                    entry.get("summary", "")
+                    or entry.get("content", [{}])[0].get("value", "")
+                )
+                if content:
+                    logger.info(f"    Page fetch failed, using RSS summary for: {entry.get('title', '')[:50]}")
+
+            if not content:
+                continue
+
             items.append(SourceItem(
                 id=SourceItem.make_id(source["name"], url),
                 title=entry.get("title", "Untitled"),

@@ -14,7 +14,7 @@ class ImpactTag(str, Enum):
     COMMERCIAL ='commercial'
     TOOLING = 'tooling'
     GOVERNANCE = 'governance'
-    CLIENT_OPPORTUNITY = 'client_oppotunity'
+    CLIENT_OPPORTUNITY = "client_opportunity"
     RISK = 'risk'
 
 class SourceItem(BaseModel):

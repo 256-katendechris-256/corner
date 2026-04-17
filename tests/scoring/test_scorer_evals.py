@@ -3,6 +3,8 @@ from agent.normalisation.schemas import SourceItem, SourceTier
 from agent.scoring.scorer import score_item
 from datetime import datetime, timezone
 
+EVAL_RUN_ID = "00000000-0000-0000-0000-000000000001"
+
 # ── Test fixtures ────────────────────────────────────────────────────────────
 
 HIGH_SIGNAL = SourceItem(
@@ -37,12 +39,12 @@ LOW_SIGNAL = SourceItem(
 
 def test_scorer_returns_result():
     """Scorer must return a ScoredItem, not None."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None, "scorer returned None — check logs for errors"
 
 def test_high_signal_relevance():
     """A major model release should score high relevance for Set Piece."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None
     assert result.relevance_score >= 0.6, (
         f"Expected relevance >= 0.6 for a major model release, got {result.relevance_score}"
@@ -50,7 +52,7 @@ def test_high_signal_relevance():
 
 def test_scores_are_valid_range():
     """All scores must be floats between 0.0 and 1.0."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None
     for field, val in [
         ("relevance",  result.relevance_score),
@@ -62,21 +64,21 @@ def test_scores_are_valid_range():
 
 def test_required_text_fields_populated():
     """what_changed and why_it_matters must not be empty."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None
     assert len(result.what_changed) > 10, "what_changed is too short or empty"
     assert len(result.why_it_matters) > 10, "why_it_matters is too short or empty"
 
 def test_impact_tags_present():
     """A high-signal item must produce at least one impact tag."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None
     assert len(result.impact_tags) >= 1, "Expected at least one impact tag"
 
 def test_low_signal_scores_lower_than_high():
     """A trivial update should score lower relevance than a major model release."""
-    high = score_item(HIGH_SIGNAL)
-    low  = score_item(LOW_SIGNAL)
+    high = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
+    low  = score_item(LOW_SIGNAL, EVAL_RUN_ID)
     assert high is not None
     assert low  is not None
     assert high.relevance_score > low.relevance_score, (
@@ -86,7 +88,7 @@ def test_low_signal_scores_lower_than_high():
 
 def test_trace_id_assigned():
     """Every scored item must have a trace_id for observability."""
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None
     assert result.trace_id is not None
     assert len(result.trace_id) > 0

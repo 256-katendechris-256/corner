@@ -1,87 +1,134 @@
 # agent/pipeline/nodes.py
+import logging
+import time
 from agent.pipeline.state import PipelineState
 from agent.ingestion.tier1 import ingest_tier1
 from agent.ingestion.rss import ingest_tier2
-from agent.normalisation.normaliser import normalise_and_store
+from agent.normalisation.normaliser import (
+    normalise_and_store, save_scored_item, log_run_stage,
+)
 from agent.scoring.scorer import score_item
-import logging
-import uuid
 
 logger = logging.getLogger(__name__)
 
-def node_collect(state: PipelineState) -> PipelineState:
-    """Fetch all sources — Tier 1 and Tier 2."""
-    logger.info('--- COLLECT ---')
+NOISY_SOURCES = {
+    "OpenAI Developer Forum",
+}
+
+def node_collect(state: PipelineState) -> dict:
+    logger.info("=== COLLECT ===")
     t1 = ingest_tier1()
     t2 = ingest_tier2(max_per_feed=5)
-    state['raw_items'] = t1 + t2
-    logger.info(f'Collected {len(state["raw_items"])} raw items')
-    return state
+    all_items = t1 + t2
 
-def node_normalise(state: PipelineState) -> PipelineState:
-    """Stage 2 — embed, dedup, store. Returns only genuinely new items."""
+    filtered = [i for i in all_items if i.source_name not in NOISY_SOURCES]
+    skipped  = len(all_items) - len(filtered)
+    if skipped:
+        logger.info(f"  Filtered {skipped} items from noisy sources")
+
+    logger.info(f"Collected {len(filtered)} items ({skipped} filtered)")
+
+    log_run_stage(
+        state["run_id"], "collect", "ok",
+        item_count=len(filtered),
+        detail=f"{len(t1)} tier1, {len(t2)} tier2, {skipped} filtered",
+    )
+    return {"raw_items": filtered}
+
+
+def _passes_quality_check(item) -> bool:
+    """Tier-aware quality gate: official sources get a lower bar."""
+    from agent.normalisation.schemas import SourceTier
+    content = item.raw_content or ""
+    clean_chars = sum(1 for c in content if c.isascii() and c.isprintable())
+    ratio = clean_chars / max(len(content), 1)
+
+    if item.source_tier == SourceTier.TIER1:
+        return len(content) >= 80 and ratio >= 0.4
+    return len(content) >= 200 and ratio >= 0.6
+
+
+def node_normalise(state: PipelineState) -> dict:
     logger.info("=== NORMALISE ===")
+    errors = []
     try:
-        # Filter out items with too little usable content before storing
         readable = []
         for item in state["raw_items"]:
-            content = item.raw_content or ""
-            # Require at least 200 chars of actual readable text
-            # items with garbled encoding produce very short clean text
-            clean_chars = sum(1 for c in content if c.isascii() and c.isprintable())
-            ratio = clean_chars / max(len(content), 1)
-            if len(content) < 200 or ratio < 0.6:
-                logger.warning(f"  SKIPPED (low quality content): {item.title[:60]}")
+            if not _passes_quality_check(item):
+                logger.warning(f"  SKIPPED (low quality): {item.title[:60]}")
                 continue
             readable.append(item)
+        logger.info(f"  {len(readable)}/{len(state['raw_items'])} passed quality check")
+        new_items = normalise_and_store(readable)
+        logger.info(f"  {len(new_items)} new items after dedup")
 
-        logger.info(f"  {len(readable)}/{len(state['raw_items'])} items passed quality check")
-        state["new_items"] = normalise_and_store(readable)
-        logger.info(f"  {len(state['new_items'])} new items after dedup")
+        log_run_stage(
+            state["run_id"], "normalise", "ok",
+            item_count=len(new_items),
+            detail=f"{len(readable)} passed quality, {len(new_items)} new after dedup",
+        )
+        return {"new_items": new_items, "errors": errors}
     except Exception as e:
         logger.error(f"Normalisation failed: {e}")
-        state["errors"].append(f"normalise: {e}")
-        state["new_items"] = []
-    return state
+        log_run_stage(state["run_id"], "normalise", "error", detail=str(e))
+        return {"new_items": [], "errors": [f"normalise: {e}"]}
 
-def node_score(state: PipelineState) -> PipelineState:
-    """Score each new item with the LLM."""
-    logger.info('--- SCORE ---')
+
+def node_score(state: PipelineState) -> dict:
+    logger.info("=== SCORE ===")
     scored = []
-    for item in state['new_items']:
-        result = score_item(item)
-        if result:
-            scored.append(result)
-        else:
-            state['errors'].append(f'Scoring failed: {item.title}')
-    state['scored_items'] = scored
-    logger.info(f'Scored {len(scored)} items')
-    return state
-def node_synthesise(state: PipelineState) -> PipelineState:
-    """Stage 4 — draft the daily digest from scored items."""
+    errors = list(state.get("errors", []))
+    run_id = state["run_id"]
+
+    for i, item in enumerate(state["new_items"]):
+        try:
+            result = score_item(item, run_id)
+            if result:
+                scored.append(result)
+                save_scored_item(result, run_id)
+                logger.info(f"  [{i+1}/{len(state['new_items'])}] scored: {item.title[:50]}")
+            else:
+                errors.append(f"score returned None: {item.title}")
+                logger.warning(f"  [{i+1}/{len(state['new_items'])}] failed: {item.title[:50]}")
+        except Exception as e:
+            logger.error(f"Scoring error on '{item.title}': {e}")
+            errors.append(f"score error: {item.title}: {e}")
+
+        if i < len(state["new_items"]) - 1:
+            time.sleep(4)
+
+    logger.info(f"Scored {len(scored)}/{len(state['new_items'])} items")
+
+    log_run_stage(
+        run_id, "score", "ok",
+        item_count=len(scored),
+        detail=f"{len(scored)}/{len(state['new_items'])} scored, {len(errors)} errors",
+    )
+    return {"scored_items": scored, "errors": errors}
+
+
+def node_synthesise(state: PipelineState) -> dict:
     logger.info("=== SYNTHESISE ===")
 
-    # Only include items above the relevance threshold
     MIN_RELEVANCE = 0.3
     quality_items = [
-        item for item in state["scored_items"]
-        if item.relevance_score >= MIN_RELEVANCE
+        i for i in state["scored_items"]
+        if i.relevance_score >= MIN_RELEVANCE
     ]
-
     logger.info(
         f"  {len(quality_items)}/{len(state['scored_items'])} items "
         f"above relevance threshold ({MIN_RELEVANCE})"
     )
 
     if not quality_items:
-        state["digest_draft"] = (
-            "No new high-signal items today "
-            f"(threshold: {MIN_RELEVANCE}, "
-            f"total scored: {len(state['scored_items'])})."
-        )
-        return state
+        return {
+            "digest_draft": (
+                f"No new high-signal items today "
+                f"(threshold: {MIN_RELEVANCE}, "
+                f"total scored: {len(state['scored_items'])})."
+            )
+        }
 
-    # Sort by relevance, take top 8
     top = sorted(quality_items,
                  key=lambda x: x.relevance_score, reverse=True)[:8]
 
@@ -105,19 +152,14 @@ def node_synthesise(state: PipelineState) -> PipelineState:
             )
         lines.append(f"**URL:** {si.canonical_url}\n")
 
-    # Summary footer
     lines += [
         "---",
         f"_Run ID: {state['run_id']} | "
-        f"Items scored: {len(state['scored_items'])} | "
+        f"Scored: {len(state['scored_items'])} | "
         f"Published: {len(top)} | "
-        f"Filtered (low relevance): "
-        f"{len(state['scored_items']) - len(quality_items)}_"
+        f"Filtered: {len(state['scored_items']) - len(quality_items)}_"
     ]
 
-    if state["errors"]:
-        lines.append(
-            f"_Pipeline errors: {len(state['errors'])} — check logs_"
-        )
-
-    state["digest_draft"] ="\n".join(lines)
+    digest = "\n".join(lines)
+    logger.info(f"  Digest built — {len(digest)} chars")
+    return {"digest_draft": digest}   # return only what changed

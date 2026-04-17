@@ -3,6 +3,7 @@ import uuid
 import logging
 from langgraph.graph import StateGraph, END
 from agent.pipeline.state import PipelineState
+from agent.observability.tracer import trace_pipeline_run
 from agent.pipeline.nodes import (
     node_collect, node_normalise, node_score, node_synthesise
 )
@@ -59,6 +60,18 @@ def run_pipeline() -> PipelineState:
     final_state = pipeline.invoke(initial_state)
     logger.info(f"Pipeline complete — errors: {final_state['errors']}")
     save_draft(final_state)
+
+    trace_pipeline_run(
+        run_id=final_state["run_id"],
+        item_count=len(final_state["raw_items"]),
+        scored_count=len(final_state["scored_items"]),
+        published_count=len([
+            i for i in final_state["scored_items"]
+            if i.relevance_score >= 0.3
+        ]),
+        errors=final_state["errors"],
+    )
+
     return final_state
 
 

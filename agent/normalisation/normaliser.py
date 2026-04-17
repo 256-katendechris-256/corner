@@ -11,11 +11,17 @@ def get_conn():
     return psycopg2.connect(settings.postgres_url)
 
 
-def is_duplicate(embedding: list[float], threshold: float = 0.92) -> bool:
+def is_duplicate(
+    embedding: list[float],
+    threshold: float | None = None,
+) -> bool:
     """
     Check if a semantically similar item already exists in the DB.
     Uses pgvector cosine similarity: 1 = identical, 0 = unrelated.
     """
+    if threshold is None:
+        threshold = settings.similarity_threshold
+
     vec_str = '[' + ','.join(map(str, embedding)) + ']'
 
     conn = get_conn()
@@ -113,3 +119,68 @@ def retrieve_similar(embedding: list[float], top_k: int = 5) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def save_scored_item(scored_item, run_id: str) -> None:
+    """Persist a ScoredItem to the scored_items table."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scored_items (
+                    id, source_item_id, run_id,
+                    relevance, novelty, urgency, confidence,
+                    what_changed, why_it_matters, recommended_action,
+                    impact_tags, trace_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (
+                scored_item.source_item.id + "-" + run_id[:8],
+                scored_item.source_item.id,
+                run_id,
+                scored_item.relevance_score,
+                scored_item.novelty_score,
+                scored_item.urgency_score,
+                scored_item.confidence_score,
+                scored_item.what_changed,
+                scored_item.why_it_matters,
+                scored_item.recommended_action,
+                [t.value for t in scored_item.impact_tags],
+                scored_item.trace_id,
+            ))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def log_run_stage(run_id: str, stage: str, status: str,
+                  item_count: int = 0, detail: str = "") -> None:
+    """Write a row to run_logs for pipeline observability."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO run_logs (run_id, stage, status, item_count, detail)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (run_id, stage, status, item_count, detail))
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to log run stage: {e}")
+    finally:
+        conn.close()
+
+
+def save_published_digest(run_id: str, digest_text: str,
+                          item_count: int = 0) -> None:
+    """Persist a published digest so it survives draft file deletion."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO published_digests (run_id, digest_text, item_count)
+                VALUES (%s, %s, %s)
+            """, (run_id, digest_text, item_count))
+        conn.commit()
+    finally:
+        conn.close()

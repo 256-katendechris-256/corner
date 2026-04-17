@@ -4,6 +4,8 @@ from agent.scoring.scorer import score_item
 from agent.normalisation.schemas import SourceItem, SourceTier
 from datetime import datetime, timezone
 
+EVAL_RUN_ID = "00000000-0000-0000-0000-000000000001"
+
 # Known high-signal item — should score high on relevance
 HIGH_SIGNAL = SourceItem(
     id='test-001',
@@ -19,7 +21,7 @@ HIGH_SIGNAL = SourceItem(
 )
 
 def test_high_signal_item_scores_above_threshold():
-    result = score_item(HIGH_SIGNAL)
+    result = score_item(HIGH_SIGNAL, EVAL_RUN_ID)
     assert result is not None, 'Scorer returned None'
     assert result.relevance_score >= 0.7, (
         f'Expected relevance >= 0.7, got {result.relevance_score}'

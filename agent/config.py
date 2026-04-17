@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Optional integrations
     youtube_api_key: str = ""
     slack_webhook_url: str = ""
+    firecrawl_api_key: str = ""
 
     # Runtime
     env: str = "development"
